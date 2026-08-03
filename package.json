@@ -1,0 +1,31 @@
+{
+  "name": "aruba-fatture-mcp",
+  "version": "1.0.0",
+  "description": "Server MCP per le API di Aruba Fatturazione Elettronica",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "aruba-fatture-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "mcp",
+    "aruba",
+    "fatturazione-elettronica",
+    "fattura-elettronica",
+    "sdi"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^7.0.2"
+  }
+}

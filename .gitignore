@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.idea/
+
+# Contiene dati personali reali: non pubblicare
+test/fattura-test-1-euro.xml
+.impeccable/
