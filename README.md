@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://modelcontextprotocol.io"><img alt="MCP server" src="https://img.shields.io/badge/MCP-server-FF7A4D"></a>
-  <img alt="Node >= 18" src="https://img.shields.io/badge/Node-%E2%89%A5%2018-3C873A">
+  <img alt="Node 18+" src="https://img.shields.io/badge/Node-18%2B-3C873A">
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178C6">
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-22B8E6">
   <img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-38E1C4">
