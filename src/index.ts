@@ -18,6 +18,25 @@ import {
   type ArubaEnvironment,
   type QueryParams,
 } from "./aruba-client.js";
+import { caricaArchivio, type EsitoCaricamento } from "./archivio.js";
+import {
+  andamento,
+  anagraficaControparti,
+  applicaFiltri,
+  prospettoIva,
+  type Filtri,
+} from "./analisi.js";
+import { ArubaPanelClient, PanelError } from "./panel-client.js";
+import {
+  andamento as andamentoPannello,
+  controparti as contropartiPannello,
+  filtra as filtraPannello,
+  normalizzaInviata,
+  normalizzaRicevuta,
+  totali as totaliPannello,
+  type FatturaPannello,
+  type FiltriPannello,
+} from "./panel.js";
 
 // ---------------------------------------------------------------------------
 // Configurazione
@@ -81,7 +100,7 @@ function jsonResult(data: unknown) {
 
 function errorResult(error: unknown) {
   let message: string;
-  if (error instanceof ArubaApiError) {
+  if (error instanceof ArubaApiError || error instanceof PanelError) {
     message = `${error.message}\nRisposta del server: ${error.body.slice(0, MAX_INLINE_STRING)}`;
   } else {
     message = error instanceof Error ? error.message : String(error);
@@ -133,6 +152,93 @@ const searchFiltersSchema = {
   modifiedEndDate: z.string().optional().describe("Data fine ultima modifica, ISO 8601"),
   page: z.number().int().min(1).optional().describe("Pagina dei risultati (default 1)"),
   size: z.number().int().min(1).max(100).optional().describe("Risultati per pagina (default 10, max 100)"),
+};
+
+// ---------------------------------------------------------------------------
+// Archivio locale di fatture
+// ---------------------------------------------------------------------------
+
+const archivioPredefinito = process.env.ARUBA_ARCHIVE_DIR;
+
+/**
+ * Parsare l'archivio a ogni chiamata sarebbe sprecato: i tool di analisi ne
+ * fanno molte di seguito sugli stessi file. La cache è per percorso e si
+ * invalida solo su richiesta esplicita (`ricarica`).
+ */
+const cacheArchivio = new Map<string, EsitoCaricamento>();
+
+let titolareCache: { partitaIva: string | null; codiceFiscale: string | null } | null = null;
+
+/**
+ * Partita IVA e codice fiscale del titolare, necessari per distinguere le
+ * fatture emesse da quelle ricevute. Si leggono da `userInfo`, con fallback
+ * alle variabili d'ambiente se l'account non è raggiungibile (archivio
+ * utilizzabile anche offline).
+ */
+async function titolare() {
+  if (titolareCache) return titolareCache;
+  const daEnv = {
+    partitaIva: process.env.ARUBA_VAT_CODE ?? null,
+    codiceFiscale: process.env.ARUBA_FISCAL_CODE ?? null,
+  };
+  try {
+    const info = (await client.userInfo()) as {
+      vatCode?: string;
+      fiscalCode?: string;
+    };
+    titolareCache = {
+      partitaIva: info.vatCode ?? daEnv.partitaIva,
+      codiceFiscale: info.fiscalCode ?? daEnv.codiceFiscale,
+    };
+  } catch {
+    titolareCache = daEnv;
+  }
+  return titolareCache;
+}
+
+async function archivio(percorso: string | undefined, ricarica = false) {
+  const cartella = percorso ?? archivioPredefinito;
+  if (!cartella) {
+    throw new Error(
+      "Nessun archivio indicato: passare 'archivePath' oppure impostare la variabile d'ambiente ARUBA_ARCHIVE_DIR con la cartella che contiene gli XML/ZIP delle fatture.",
+    );
+  }
+  const target = resolve(cartella);
+  const inCache = cacheArchivio.get(target);
+  if (inCache && !ricarica) return inCache;
+
+  const esito = await caricaArchivio(target, await titolare());
+  cacheArchivio.set(target, esito);
+  return esito;
+}
+
+const archivioSchema = {
+  archivePath: z
+    .string()
+    .optional()
+    .describe(
+      "Cartella (o singolo file) con gli XML/P7M/ZIP delle fatture. Se omesso usa ARUBA_ARCHIVE_DIR",
+    ),
+  ricarica: z
+    .boolean()
+    .default(false)
+    .describe("true per rileggere i file da disco ignorando la cache in memoria"),
+};
+
+const filtriSchema = {
+  direzione: z
+    .enum(["emessa", "ricevuta"])
+    .optional()
+    .describe('"emessa" = ciclo attivo (vendite), "ricevuta" = ciclo passivo (acquisti)'),
+  dataDa: z.string().optional().describe("Data minima del documento, YYYY-MM-DD (inclusa)"),
+  dataA: z.string().optional().describe("Data massima del documento, YYYY-MM-DD (inclusa)"),
+  controparte: z
+    .string()
+    .optional()
+    .describe("Ricerca parziale su denominazione, partita IVA o codice fiscale della controparte"),
+  tipoDocumento: z.string().optional().describe("Tipo documento FatturaPA (TD01, TD04, ...)"),
+  importoMinimo: z.number().optional().describe("Totale documento minimo"),
+  importoMassimo: z.number().optional().describe("Totale documento massimo"),
 };
 
 function requireIdentifier(args: {
@@ -378,6 +484,374 @@ server.registerTool(
         { query: { invoiceFilename } },
       );
       return jsonResult(data);
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Pannello Aruba (API privata del pannello web)
+// ---------------------------------------------------------------------------
+
+const panelClient = new ArubaPanelClient(username, password);
+
+const ENDPOINT_RICERCA = {
+  inviate: "FatturaFrontEnd/advancedSearch",
+  ricevute: "FatturaRicevutaFrontEnd/advancedSearch",
+} as const;
+
+/**
+ * Le fatture scaricate dal pannello, per anno e ciclo. Il pannello non filtra
+ * per data lato server, quindi si scarica l'anno intero una volta sola e si
+ * riusa per tutte le aggregazioni successive.
+ */
+const cachePannello = new Map<string, FatturaPannello[]>();
+
+async function fattureP(
+  ciclo: "inviate" | "ricevute",
+  anno: number,
+  ricarica: boolean,
+): Promise<FatturaPannello[]> {
+  const chiave = `${ciclo}-${anno}`;
+  const inCache = cachePannello.get(chiave);
+  if (inCache && !ricarica) return inCache;
+
+  const grezze = await panelClient.serviceAll<Record<string, unknown>>(
+    ENDPOINT_RICERCA[ciclo],
+    { AnnoFiscale: anno },
+  );
+  const normalizza = ciclo === "inviate" ? normalizzaInviata : normalizzaRicevuta;
+  const fatture = grezze.map(normalizza);
+  cachePannello.set(chiave, fatture);
+  return fatture;
+}
+
+const annoCorrente = new Date().getFullYear();
+
+const cicloSchema = z
+  .enum(["inviate", "ricevute"])
+  .describe('"inviate" = ciclo attivo (vendite), "ricevute" = ciclo passivo (acquisti). Inviate e ricevute sono sempre tenute separate');
+
+const annoSchema = z
+  .number()
+  .int()
+  .min(2015)
+  .max(annoCorrente + 1)
+  .default(annoCorrente)
+  .describe("Anno fiscale delle fatture");
+
+const ricaricaPannelloSchema = z
+  .boolean()
+  .default(false)
+  .describe("true per riscaricare i dati dal pannello ignorando la cache");
+
+server.registerTool(
+  "panel_list_invoices",
+  {
+    title: "Elenco fatture dal pannello Aruba (live)",
+    description:
+      "Scarica le fatture direttamente dal pannello web di Aruba (dati in tempo reale, nessuna utenza Premium richiesta) e le elenca. " +
+      "Il parametro 'ciclo' sceglie SE inviate O ricevute: i due cicli sono sempre restituiti separatamente, mai insieme. " +
+      "Filtri opzionali per periodo e controparte; include i totali del sottoinsieme.",
+    inputSchema: {
+      ciclo: cicloSchema,
+      anno: annoSchema,
+      dataDa: z.string().optional().describe("Data minima YYYY-MM-DD (inclusa)"),
+      dataA: z.string().optional().describe("Data massima YYYY-MM-DD (inclusa)"),
+      controparte: z.string().optional().describe("Ricerca parziale su cliente (inviate) o fornitore (ricevute)"),
+      limite: z.number().int().min(1).default(100).describe("Numero massimo di fatture da restituire"),
+      ricarica: ricaricaPannelloSchema,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  async ({ ciclo, anno, dataDa, dataA, controparte, limite, ricarica }) => {
+    try {
+      const tutte = await fattureP(ciclo, anno, ricarica);
+      const selezionate = filtraPannello(tutte, { dataDa, dataA, controparte } as FiltriPannello);
+      return jsonResult({
+        ciclo,
+        anno,
+        fattureNelPeriodo: selezionate.length,
+        fattureNellAnno: tutte.length,
+        totali: totaliPannello(selezionate),
+        fatture: selezionate.slice(0, limite),
+        ...(selezionate.length > limite
+          ? { nota: `Mostrate ${limite} di ${selezionate.length}: alzare 'limite' o restringere i filtri.` }
+          : {}),
+      });
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "panel_counterparties",
+  {
+    title: "Clienti o fornitori dal pannello Aruba (live)",
+    description:
+      "Ricostruisce l'anagrafica delle controparti dalle fatture del pannello, con totali e periodo di attività. " +
+      "Con ciclo='inviate' restituisce i CLIENTI, con ciclo='ricevute' i FORNITORI: i due elenchi sono sempre separati.",
+    inputSchema: {
+      ciclo: cicloSchema,
+      anno: annoSchema,
+      dataDa: z.string().optional().describe("Considera solo le fatture da questa data, YYYY-MM-DD"),
+      dataA: z.string().optional().describe("Considera solo le fatture fino a questa data, YYYY-MM-DD"),
+      ricarica: ricaricaPannelloSchema,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  async ({ ciclo, anno, dataDa, dataA, ricarica }) => {
+    try {
+      const tutte = await fattureP(ciclo, anno, ricarica);
+      const selezionate = filtraPannello(tutte, { dataDa, dataA } as FiltriPannello);
+      const schede = contropartiPannello(selezionate);
+      return jsonResult({
+        ciclo,
+        tipo: ciclo === "inviate" ? "clienti" : "fornitori",
+        anno,
+        numero: schede.length,
+        controparti: schede,
+      });
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "panel_vat_report",
+  {
+    title: "Prospetto IVA dal pannello Aruba (live)",
+    description:
+      "Calcola i totali IVA dell'anno dal pannello, tenendo separate IVA sulle vendite (fatture inviate) e IVA sugli acquisti (fatture ricevute), con il saldo tra le due. " +
+      "È un prospetto contabile di supporto, non una liquidazione IVA ufficiale.",
+    inputSchema: {
+      anno: annoSchema,
+      dataDa: z.string().optional().describe("Inizio periodo YYYY-MM-DD (inclusa)"),
+      dataA: z.string().optional().describe("Fine periodo YYYY-MM-DD (inclusa)"),
+      ricarica: ricaricaPannelloSchema,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  async ({ anno, dataDa, dataA, ricarica }) => {
+    try {
+      const [inviate, ricevute] = await Promise.all([
+        fattureP("inviate", anno, ricarica),
+        fattureP("ricevute", anno, ricarica),
+      ]);
+      const filtro = { dataDa, dataA } as FiltriPannello;
+      const venditeTot = totaliPannello(filtraPannello(inviate, filtro));
+      const acquistiTot = totaliPannello(filtraPannello(ricevute, filtro));
+      return jsonResult({
+        anno,
+        periodo: { da: dataDa ?? null, a: dataA ?? null },
+        ivaVendite: { imponibile: venditeTot.imponibile, imposta: venditeTot.imposta, numeroFatture: venditeTot.numero },
+        ivaAcquisti: { imponibile: acquistiTot.imponibile, imposta: acquistiTot.imposta, numeroFatture: acquistiTot.numero },
+        saldoIva: Math.round((venditeTot.imposta - acquistiTot.imposta) * 100) / 100,
+        avvertenza:
+          "Saldo = IVA a debito (vendite) meno IVA sugli acquisti, sulle fatture del pannello. " +
+          "Non è una liquidazione IVA: non tiene conto di detraibilità parziale, reverse charge, split payment o crediti pregressi.",
+      });
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "panel_revenue_trend",
+  {
+    title: "Andamento fatturato/acquisti dal pannello Aruba (live)",
+    description:
+      "Andamento per mese, trimestre o anno dal pannello, con inviate e ricevute riportate separatamente in due serie distinte.",
+    inputSchema: {
+      anno: annoSchema,
+      granularita: z.enum(["mese", "trimestre", "anno"]).default("mese").describe("Livello di aggregazione temporale"),
+      ricarica: ricaricaPannelloSchema,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  async ({ anno, granularita, ricarica }) => {
+    try {
+      const [inviate, ricevute] = await Promise.all([
+        fattureP("inviate", anno, ricarica),
+        fattureP("ricevute", anno, ricarica),
+      ]);
+      return jsonResult({
+        anno,
+        granularita,
+        inviate: andamentoPannello(inviate, granularita),
+        ricevute: andamentoPannello(ricevute, granularita),
+      });
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Tool di analisi sull'archivio locale
+// ---------------------------------------------------------------------------
+
+server.registerTool(
+  "list_invoices",
+  {
+    title: "Elenco fatture (archivio locale)",
+    description:
+      "Elenca le fatture presenti nell'archivio locale di XML/P7M/ZIP, filtrando per direzione (emesse/ricevute), periodo, controparte, tipo documento e importo. " +
+      "Non richiede utenza Premium: legge i file esportati dal pannello Aruba. Restituisce anche i totali del sottoinsieme filtrato.",
+    inputSchema: {
+      ...archivioSchema,
+      ...filtriSchema,
+      dettaglioRighe: z
+        .boolean()
+        .default(false)
+        .describe("true per includere le righe di dettaglio di ogni fattura (output molto più lungo)"),
+      limite: z
+        .number()
+        .int()
+        .min(1)
+        .default(100)
+        .describe("Numero massimo di fatture da restituire"),
+    },
+    annotations: { readOnlyHint: true },
+  },
+  async ({ archivePath, ricarica, dettaglioRighe, limite, ...filtri }) => {
+    try {
+      const { fatture, scartati, fileEsaminati } = await archivio(archivePath, ricarica);
+      const selezionate = applicaFiltri(fatture, filtri as Filtri);
+
+      const totali = selezionate.reduce(
+        (acc, f) => ({
+          imponibile: acc.imponibile + f.imponibileTotale,
+          imposta: acc.imposta + f.impostaTotale,
+          totale: acc.totale + f.totaleDocumento,
+        }),
+        { imponibile: 0, imposta: 0, totale: 0 },
+      );
+
+      return jsonResult({
+        fileEsaminati,
+        fattureInArchivio: fatture.length,
+        fattureFiltrate: selezionate.length,
+        totali: {
+          imponibile: Math.round(totali.imponibile * 100) / 100,
+          imposta: Math.round(totali.imposta * 100) / 100,
+          totaleDocumenti: Math.round(totali.totale * 100) / 100,
+        },
+        fatture: selezionate.slice(0, limite).map((f) => ({
+          data: f.data,
+          numero: f.numero,
+          tipoDocumento: f.tipoDocumento,
+          direzione: f.direzione,
+          controparte: f.controparte.denominazione,
+          partitaIvaControparte: f.controparte.partitaIva,
+          imponibile: f.imponibileTotale,
+          imposta: f.impostaTotale,
+          totale: f.totaleDocumento,
+          dataScadenza: f.dataScadenza,
+          file: f.file,
+          ...(dettaglioRighe ? { righe: f.righe, riepilogoIva: f.riepilogoIva } : {}),
+        })),
+        ...(selezionate.length > limite
+          ? { nota: `Mostrate ${limite} di ${selezionate.length} fatture: alzare 'limite' o restringere i filtri.` }
+          : {}),
+        ...(scartati.length ? { fileScartati: scartati } : {}),
+      });
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "list_counterparties",
+  {
+    title: "Anagrafica clienti e fornitori",
+    description:
+      "Ricostruisce l'anagrafica di clienti e fornitori dalle fatture dell'archivio locale, con numero di documenti, totali e periodo di attività di ciascuno. " +
+      "I clienti sono le controparti delle fatture emesse, i fornitori quelle delle fatture ricevute. Ordinati per imponibile decrescente.",
+    inputSchema: {
+      ...archivioSchema,
+      ruolo: z
+        .enum(["cliente", "fornitore", "tutti"])
+        .default("tutti")
+        .describe("Filtra per ruolo della controparte"),
+      dataDa: z.string().optional().describe("Considera solo le fatture da questa data, YYYY-MM-DD"),
+      dataA: z.string().optional().describe("Considera solo le fatture fino a questa data, YYYY-MM-DD"),
+    },
+    annotations: { readOnlyHint: true },
+  },
+  async ({ archivePath, ricarica, ruolo, dataDa, dataA }) => {
+    try {
+      const { fatture } = await archivio(archivePath, ricarica);
+      const selezionate = applicaFiltri(fatture, { dataDa, dataA });
+      const schede = anagraficaControparti(selezionate).filter(
+        (s) => ruolo === "tutti" || s.ruolo === ruolo || s.ruolo === "cliente e fornitore",
+      );
+      return jsonResult({
+        periodo: { da: dataDa ?? null, a: dataA ?? null },
+        numeroControparti: schede.length,
+        controparti: schede,
+      });
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "vat_report",
+  {
+    title: "Prospetto IVA",
+    description:
+      "Calcola il riepilogo IVA del periodo dall'archivio locale: imponibile e imposta suddivisi per aliquota e natura, separando IVA sulle vendite (fatture emesse) e sugli acquisti (fatture ricevute), con il saldo tra le due. " +
+      "È un prospetto contabile di supporto, non una liquidazione IVA ufficiale.",
+    inputSchema: {
+      ...archivioSchema,
+      dataDa: z.string().optional().describe("Inizio del periodo, YYYY-MM-DD (inclusa)"),
+      dataA: z.string().optional().describe("Fine del periodo, YYYY-MM-DD (inclusa)"),
+    },
+    annotations: { readOnlyHint: true },
+  },
+  async ({ archivePath, ricarica, dataDa, dataA }) => {
+    try {
+      const { fatture } = await archivio(archivePath, ricarica);
+      const selezionate = applicaFiltri(fatture, { dataDa, dataA });
+      return jsonResult(prospettoIva(selezionate, { da: dataDa, a: dataA }));
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "revenue_trend",
+  {
+    title: "Andamento per periodo",
+    description:
+      "Andamento di fatturato e acquisti aggregato per mese, trimestre o anno, a partire dall'archivio locale. Utile per confronti tra periodi e per l'IVA trimestrale.",
+    inputSchema: {
+      ...archivioSchema,
+      granularita: z
+        .enum(["mese", "trimestre", "anno"])
+        .default("mese")
+        .describe("Livello di aggregazione temporale"),
+      dataDa: z.string().optional().describe("Inizio del periodo, YYYY-MM-DD"),
+      dataA: z.string().optional().describe("Fine del periodo, YYYY-MM-DD"),
+    },
+    annotations: { readOnlyHint: true },
+  },
+  async ({ archivePath, ricarica, granularita, dataDa, dataA }) => {
+    try {
+      const { fatture } = await archivio(archivePath, ricarica);
+      const selezionate = applicaFiltri(fatture, { dataDa, dataA });
+      return jsonResult({
+        granularita,
+        periodi: andamento(selezionate, granularita),
+      });
     } catch (error) {
       return errorResult(error);
     }
