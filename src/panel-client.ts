@@ -215,15 +215,21 @@ export class ArubaPanelClient {
   // -- Chiamate ai servizi del pannello --
 
   /**
-   * POST verso `/services/<path>`. Alla prima 401 riprova una volta con un
-   * nuovo login: la sessione può scadere lato server prima del TTL locale.
+   * Chiamata a `/services/<path>`. Il pannello usa POST per la quasi totalità
+   * degli endpoint; alcuni (es. cancellazione bozza) richiedono DELETE. Alla
+   * prima 401 riprova una volta con un nuovo login: la sessione può scadere
+   * lato server prima del TTL locale.
    */
-  async service<T = unknown>(path: string, body: unknown = {}): Promise<T> {
+  async service<T = unknown>(
+    path: string,
+    body: unknown = {},
+    method: "POST" | "DELETE" = "POST",
+  ): Promise<T> {
     await this.ensureSession();
 
     const doCall = () =>
       this.raw(`${PANEL_ORIGIN}/services/${path}`, {
-        method: "POST",
+        method,
         headers: {
           "Content-Type": "application/json",
           Accept: "application/json",

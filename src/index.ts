@@ -37,6 +37,13 @@ import {
   type FatturaPannello,
   type FiltriPannello,
 } from "./panel.js";
+import {
+  estraiCedente,
+  generaFatturaXml,
+  type ClienteRegistro,
+  type RigaInput,
+} from "./panel-invoice.js";
+import { parseFatturaXml } from "./fatturapa.js";
 
 // ---------------------------------------------------------------------------
 // Configurazione
@@ -684,6 +691,297 @@ server.registerTool(
         granularita,
         inviate: andamentoPannello(inviate, granularita),
         ricevute: andamentoPannello(ricevute, granularita),
+      });
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Pannello Aruba: dettaglio, registro anagrafiche, creazione e upload
+// ---------------------------------------------------------------------------
+
+const ENDPOINT_DETTAGLIO = {
+  inviate: {
+    xml: "FatturaFrontEnd/ExtractXmlInvoiceSend",
+    pdf: "FatturaFrontEnd/ExtractPdfInvoiceSend",
+  },
+  ricevute: {
+    xml: "FatturaRicevutaFrontEnd/ExtractXmlInvoiceReceived",
+    pdf: "FatturaRicevutaFrontEnd/ExtractPdfInvoiceReceived",
+  },
+} as const;
+
+// Versione del tracciato SDI attesa dal pannello nelle operazioni di upload.
+// È una configurazione stabile dell'account; sovrascrivibile via ambiente.
+const TRACCIATO_SDI = process.env.ARUBA_TRACCIATO_SDI ?? "V_1_2_1";
+
+interface ContenutoFile {
+  Content?: string;
+  ContentFileName?: string;
+}
+
+server.registerTool(
+  "panel_invoice_detail",
+  {
+    title: "Dettaglio fattura dal pannello Aruba (live)",
+    description:
+      "Restituisce il dettaglio completo di una singola fattura del pannello, identificata da 'ciclo' + 'id' (l'id proviene da panel_list_invoices). " +
+      "Opzionalmente salva su disco l'XML e/o il PDF della fattura. Inviate e ricevute restano canali distinti.",
+    inputSchema: {
+      ciclo: cicloSchema,
+      id: z.string().describe("Id della fattura (campo 'id' restituito da panel_list_invoices)"),
+      anno: annoSchema,
+      salvaXmlIn: z.string().optional().describe("Percorso file dove salvare l'XML della fattura"),
+      salvaPdfIn: z.string().optional().describe("Percorso file dove salvare il PDF della fattura"),
+    },
+    annotations: { readOnlyHint: true },
+  },
+  async ({ ciclo, id, anno, salvaXmlIn, salvaPdfIn }) => {
+    try {
+      const ep = ENDPOINT_DETTAGLIO[ciclo];
+
+      // I metadati completi sono nell'elemento della lista (advancedSearchId
+      // restituisce solo gli identificativi); le righe stanno invece nell'XML.
+      const lista = await panelClient.serviceAll<Record<string, unknown>>(
+        ENDPOINT_RICERCA[ciclo],
+        { AnnoFiscale: anno },
+      );
+      const record = lista.find((f) => f.Id === id);
+      if (!record) {
+        throw new Error(`Nessuna fattura trovata per id ${id} (ciclo ${ciclo}, anno ${anno}).`);
+      }
+
+      // XML della fattura: serve per le righe di dettaglio e per l'eventuale salvataggio.
+      const fileXml = await panelClient.service<ContenutoFile>(ep.xml, { Id: id });
+      let righe: unknown = undefined;
+      let riepilogoIva: unknown = undefined;
+      if (fileXml.Content) {
+        try {
+          const parsed = parseFatturaXml(Buffer.from(fileXml.Content, "base64").toString("utf8"))[0];
+          righe = parsed?.righe;
+          riepilogoIva = parsed?.riepilogoIva;
+        } catch {
+          // XML non parsabile (raro): si restituiscono comunque i metadati.
+        }
+      }
+
+      const salvataggi: Record<string, string> = {};
+      if (salvaXmlIn && fileXml.Content) {
+        const target = resolve(salvaXmlIn);
+        await mkdir(dirname(target), { recursive: true });
+        await writeFile(target, Buffer.from(fileXml.Content, "base64"));
+        salvataggi.xml = target;
+      }
+      if (salvaPdfIn) {
+        const filePdf = await panelClient.service<ContenutoFile>(ep.pdf, { Id: id });
+        if (filePdf.Content) {
+          const target = resolve(salvaPdfIn);
+          await mkdir(dirname(target), { recursive: true });
+          await writeFile(target, Buffer.from(filePdf.Content, "base64"));
+          salvataggi.pdf = target;
+        }
+      }
+
+      return jsonResult({
+        ciclo,
+        dettaglio: record,
+        ...(righe ? { righe } : {}),
+        ...(riepilogoIva ? { riepilogoIva } : {}),
+        ...(Object.keys(salvataggi).length ? { fileSalvati: salvataggi } : {}),
+      });
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "panel_registry",
+  {
+    title: "Registro clienti/fornitori del pannello Aruba (live)",
+    description:
+      "Restituisce l'anagrafica salvata nel pannello Aruba: i CLIENTI (tipo='clienti') o i FORNITORI (tipo='fornitori'), con partita IVA, codice fiscale, codice destinatario SDI e indirizzo. " +
+      "È il registro ufficiale da cui scegliere il destinatario quando si crea una fattura (panel_create_invoice_xml). Clienti e fornitori sono elenchi separati.",
+    inputSchema: {
+      tipo: z
+        .enum(["clienti", "fornitori"])
+        .describe("'clienti' = registro clienti (destinatari delle fatture emesse), 'fornitori' = registro fornitori"),
+      ricerca: z.string().optional().describe("Filtro parziale su denominazione, partita IVA o codice fiscale"),
+      limite: z.number().int().min(1).default(50).describe("Numero massimo di anagrafiche da restituire"),
+    },
+    annotations: { readOnlyHint: true },
+  },
+  async ({ tipo, ricerca, limite }) => {
+    try {
+      const endpoint = tipo === "clienti" ? "DtClienteList" : "DtFornitoreList";
+      const tutte = await panelClient.serviceAll<Record<string, unknown>>(endpoint, {});
+      const q = ricerca?.trim().toLowerCase();
+      const filtrate = q
+        ? tutte.filter((r) =>
+            JSON.stringify([
+              r.AnagraficaCliente ?? r.AnagraficaFornitore,
+              r.PartitaIva,
+              r.CodiceFiscale,
+            ])
+              .toLowerCase()
+              .includes(q),
+          )
+        : tutte;
+      return jsonResult({
+        tipo,
+        numero: filtrate.length,
+        anagrafiche: filtrate.slice(0, limite),
+        ...(filtrate.length > limite
+          ? { nota: `Mostrate ${limite} di ${filtrate.length}: usare 'ricerca' o alzare 'limite'.` }
+          : {}),
+      });
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+const rigaSchema = z.object({
+  descrizione: z.string().describe("Descrizione della riga"),
+  quantita: z.number().optional().describe("Quantità (default 1)"),
+  prezzoUnitario: z.number().describe("Prezzo unitario, IVA esclusa"),
+  aliquotaIva: z.number().describe("Aliquota IVA in percentuale (es. 22). Usare 0 con 'natura' per operazioni senza IVA"),
+  natura: z.string().optional().describe("Codice natura (N1…N7) per righe senza IVA"),
+  unitaMisura: z.string().optional().describe("Unità di misura (es. NR, ORE)"),
+});
+
+server.registerTool(
+  "panel_create_invoice_xml",
+  {
+    title: "Genera XML fattura da inviare (pannello Aruba)",
+    description:
+      "Crea il file XML di una fattura elettronica (FatturaPA) pronta per l'upload, scegliendo il destinatario dal registro clienti Aruba. " +
+      "I dati fiscali del mittente sono riusati da una fattura già emessa (sempre corretti). Il file NON viene inviato: va poi caricato con panel_upload_invoice. " +
+      "Restituisce il percorso del file e i totali calcolati (imponibile, IVA, totale) per verifica.",
+    inputSchema: {
+      clientePartitaIva: z.string().optional().describe("Partita IVA del cliente da cercare nel registro (in alternativa a clienteId)"),
+      clienteId: z.string().optional().describe("Id del cliente nel registro Aruba (da panel_registry)"),
+      numero: z.string().describe("Numero della fattura (es. 20 o FPR 20/26)"),
+      data: z.string().describe("Data documento YYYY-MM-DD"),
+      righe: z.array(rigaSchema).min(1).describe("Righe della fattura"),
+      tipoDocumento: z.string().default("TD01").describe("Tipo documento FatturaPA (default TD01)"),
+      causale: z.string().optional().describe("Causale/descrizione generale della fattura"),
+      progressivoInvio: z.string().optional().describe("Progressivo invio (default: numeri progressivi automatici lato Aruba)"),
+      outputPath: z.string().describe("Percorso assoluto del file XML da generare"),
+    },
+  },
+  async ({ clientePartitaIva, clienteId, numero, data, righe, tipoDocumento, causale, progressivoInvio, outputPath }) => {
+    try {
+      if (!clientePartitaIva && !clienteId) {
+        throw new Error("Specificare clienteId oppure clientePartitaIva per identificare il destinatario.");
+      }
+
+      // Cliente dal registro Aruba.
+      const clienti = await panelClient.serviceAll<ClienteRegistro & { Id?: string }>("DtClienteList", {});
+      const pivaNorm = clientePartitaIva?.replace(/^IT/i, "").trim();
+      const cliente = clienti.find((c) =>
+        clienteId
+          ? c.Id === clienteId
+          : (c.PartitaIva ?? "").replace(/^IT/i, "").trim() === pivaNorm,
+      );
+      if (!cliente) {
+        throw new Error(
+          "Cliente non trovato nel registro Aruba. Usare panel_registry per elencare i clienti disponibili.",
+        );
+      }
+
+      // Blocco cedente riusato dall'ultima fattura emessa.
+      const inviate = await panelClient.serviceAll<{ Id?: string }>(
+        ENDPOINT_RICERCA.inviate,
+        { AnnoFiscale: new Date().getFullYear() },
+      );
+      if (!inviate.length || !inviate[0].Id) {
+        throw new Error(
+          "Nessuna fattura emessa da cui ricavare i dati del mittente: crea la prima fattura dal pannello web, poi riprova.",
+        );
+      }
+      const xmlCampione = await panelClient.service<ContenutoFile>(
+        ENDPOINT_DETTAGLIO.inviate.xml,
+        { Id: inviate[0].Id },
+      );
+      const cedenteBlock = xmlCampione.Content
+        ? estraiCedente(Buffer.from(xmlCampione.Content, "base64").toString("utf8"))
+        : null;
+      if (!cedenteBlock) {
+        throw new Error("Impossibile ricavare il blocco anagrafico del mittente dalla fattura campione.");
+      }
+
+      const { xml, imponibile, imposta, totale } = generaFatturaXml({
+        cedenteBlock,
+        cliente,
+        dati: { numero, data, tipoDocumento, causale, progressivoInvio, righe: righe as RigaInput[] },
+      });
+
+      const target = resolve(outputPath);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, xml, "utf8");
+
+      return jsonResult({
+        file: target,
+        destinatario: cliente.AnagraficaCliente,
+        codiceDestinatario: cliente.CodiceDestinatario,
+        totali: { imponibile, imposta, totale },
+        nota: "File generato e salvato. Per inviarlo: verifica i totali, poi usa panel_upload_invoice (crea una bozza; l'invio a SDI richiede conferma esplicita).",
+      });
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "panel_upload_invoice",
+  {
+    title: "Carica una fattura XML nel pannello come bozza (Aruba)",
+    description:
+      "Carica un file XML FatturaPA nel pannello Aruba, creando una BOZZA pronta da rivedere e inviare. " +
+      "NON invia la fattura a SDI: l'invio è un'azione irreversibile e, su questo account, Aruba richiede un OTP via SMS. " +
+      "Dopo l'upload, rivedi la bozza nel pannello web e inviala da lì, oppure usa il tool di invio dedicato con l'OTP. " +
+      "Fornire il file tramite xmlFilePath (consigliato) oppure xmlContent.",
+    inputSchema: {
+      xmlFilePath: z.string().optional().describe("Percorso del file XML FatturaPA da caricare"),
+      xmlContent: z.string().optional().describe("In alternativa: contenuto XML come testo"),
+      fileName: z.string().optional().describe("Nome file da associare (default: derivato dal percorso o generico)"),
+    },
+  },
+  async ({ xmlFilePath, xmlContent, fileName }) => {
+    try {
+      let xml: string;
+      let nome = fileName;
+      if (xmlFilePath) {
+        const p = resolve(xmlFilePath);
+        xml = await readFile(p, "utf8");
+        nome = nome ?? p.split(/[\\/]/).pop();
+      } else if (xmlContent) {
+        xml = xmlContent;
+      } else {
+        throw new Error("Specificare xmlFilePath oppure xmlContent.");
+      }
+
+      const FileBase64 = Buffer.from(xml, "utf8").toString("base64");
+      const risposta = await panelClient.service<{ Id?: string }>(
+        "FatturaFrontEnd/SaveUploadInvoiceToDraft",
+        { FileBase64, FileName: nome ?? "fattura.xml", TracciatoSdiAbilitato: TRACCIATO_SDI },
+      );
+
+      if (!risposta.Id) {
+        return jsonResult({
+          esito: "Upload eseguito ma nessun id bozza restituito.",
+          rispostaServer: risposta,
+        });
+      }
+      return jsonResult({
+        esito: "Bozza creata nel pannello Aruba.",
+        idBozza: risposta.Id,
+        prossimoPasso:
+          "Rivedi la bozza nel pannello web (sezione Bozze) e inviala da lì. L'invio a SDI è irreversibile e richiede l'OTP via SMS previsto dal tuo account.",
       });
     } catch (error) {
       return errorResult(error);

@@ -19,11 +19,25 @@ Accedono al pannello con le stesse credenziali del login web, replicandone l'API
 | Tool | Descrizione |
 |---|---|
 | `panel_list_invoices` | Elenco fatture di **un** ciclo (`inviate` **o** `ricevute`), con filtri per periodo e controparte e i totali |
+| `panel_invoice_detail` | Dettaglio di una singola fattura (metadati + righe + riepilogo IVA); può salvare XML e PDF su disco |
 | `panel_counterparties` | Clienti (dalle inviate) **o** fornitori (dalle ricevute), con totali e periodo di attività |
+| `panel_registry` | Registro anagrafico salvato in Aruba: clienti **o** fornitori, con P.IVA, codice fiscale, codice destinatario e indirizzo |
 | `panel_vat_report` | Totali IVA dell'anno: IVA vendite e IVA acquisti separate, con il saldo |
 | `panel_revenue_trend` | Andamento per mese/trimestre/anno, inviate e ricevute in due serie distinte |
+| `panel_create_invoice_xml` | Genera l'XML di una nuova fattura scegliendo il cliente dal registro Aruba; calcola i totali. Non invia |
+| `panel_upload_invoice` | Carica un XML nel pannello creando una **bozza** pronta da rivedere e inviare. Non invia a SDI |
 
-Ogni tool di elenco/anagrafica richiede il parametro `ciclo` proprio per non mescolare mai i due flussi. I dati dell'anno vengono scaricati una volta e messi in cache; `ricarica: true` forza il riscaricamento.
+Ogni tool di elenco/anagrafica richiede il parametro `ciclo` (o `tipo`) proprio per non mescolare mai i due flussi. I dati dell'anno vengono scaricati una volta e messi in cache; `ricarica: true` forza il riscaricamento.
+
+### Creare e inviare una fattura
+
+Il flusso è pensato per essere sicuro rispetto all'unica azione irreversibile — l'invio a SDI:
+
+1. `panel_registry` con `tipo: "clienti"` per trovare il destinatario (o si conosce già la sua P.IVA);
+2. `panel_create_invoice_xml` genera l'XML: i dati del mittente sono riusati da una fattura già emessa (sempre corretti), il destinatario dal registro Aruba, e i totali IVA sono calcolati dalle righe. Restituisce il file e i totali da verificare;
+3. `panel_upload_invoice` carica l'XML nel pannello come **bozza**.
+
+**L'invio a SDI non è automatizzato di proposito.** È un'azione irreversibile e, su questo account, Aruba richiede un **OTP via SMS** per completarla (`jsAbilitaOtpCaricaFattura`). Dopo l'upload, la bozza va rivista e inviata dal pannello web. È una tutela voluta: nessun tool può far partire una fattura reale senza un passaggio umano.
 
 > Questi tool usano l'**API privata del pannello**, non documentata da Aruba: è più comoda (nessun requisito di utenza) ma può cambiare senza preavviso. Per l'accesso ufficiale e stabile restano i tool «API Aruba» qui sotto, che però richiedono un'utenza Premium.
 
