@@ -1,0 +1,138 @@
+<svg width="1280" height="360" viewBox="0 0 1280 360" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0B1020"/>
+      <stop offset="0.55" stop-color="#0E1430"/>
+      <stop offset="1" stop-color="#0A0F22"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF7A4D"/>
+      <stop offset="1" stop-color="#FFB020"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#38E1C4"/>
+      <stop offset="1" stop-color="#22B8E6"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FF7A4D" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#FF7A4D" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#38E1C4" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#38E1C4" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="34" height="34" patternUnits="userSpaceOnUse">
+      <circle cx="1.2" cy="1.2" r="1.2" fill="#6E7BB0" fill-opacity="0.10"/>
+    </pattern>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+  </defs>
+
+  <!-- background -->
+  <rect width="1280" height="360" rx="0" fill="url(#bg)"/>
+  <rect width="1280" height="360" fill="url(#grid)"/>
+  <circle cx="980" cy="150" r="320" fill="url(#glow)"/>
+  <circle cx="1120" cy="300" r="240" fill="url(#glow2)"/>
+
+  <!-- ===== LEFT: text block ===== -->
+  <g transform="translate(80, 96)">
+    <!-- eyebrow -->
+    <g>
+      <rect x="0" y="0" width="10" height="10" rx="2.5" fill="url(#cyan)"/>
+      <text x="22" y="9" font-size="14" font-weight="600" letter-spacing="3.5" fill="#7FE7D4">MODEL&#160;CONTEXT&#160;PROTOCOL&#160;SERVER</text>
+    </g>
+
+    <!-- title -->
+    <text x="-2" y="76" font-size="66" font-weight="800" letter-spacing="-1.5" fill="#F5F8FF">Aruba Fatture <tspan fill="url(#accent)">MCP</tspan></text>
+
+    <!-- subtitle -->
+    <text x="0" y="122" font-size="21" font-weight="500" fill="#AEB9D6">Fatturazione Elettronica Aruba in qualsiasi client MCP, in tempo reale.</text>
+    <text x="0" y="151" font-size="21" font-weight="500" fill="#7E89A8">Lista fatture, clienti e fornitori, statistiche IVA e creazione documenti.</text>
+
+    <!-- chips -->
+    <g transform="translate(0, 186)" font-size="14.5" font-weight="600">
+      <g>
+        <rect x="0" y="0" width="128" height="34" rx="17" fill="#FF7A4D" fill-opacity="0.12" stroke="#FF7A4D" stroke-opacity="0.5"/>
+        <circle cx="20" cy="17" r="4" fill="#FF9366"/>
+        <text x="34" y="22" fill="#FFC7A8">Fatture live</text>
+      </g>
+      <g transform="translate(140,0)">
+        <rect x="0" y="0" width="180" height="34" rx="17" fill="#38E1C4" fill-opacity="0.10" stroke="#38E1C4" stroke-opacity="0.45"/>
+        <circle cx="20" cy="17" r="4" fill="#5FE9D0"/>
+        <text x="34" y="22" fill="#A9F0E2">Clienti &amp; Fornitori</text>
+      </g>
+      <g transform="translate(332,0)">
+        <rect x="0" y="0" width="164" height="34" rx="17" fill="#8FA0FF" fill-opacity="0.10" stroke="#8FA0FF" stroke-opacity="0.45"/>
+        <circle cx="20" cy="17" r="4" fill="#A6B4FF"/>
+        <text x="34" y="22" fill="#C7D0FF">IVA &amp; Statistiche</text>
+      </g>
+      <g transform="translate(508,0)">
+        <rect x="0" y="0" width="150" height="34" rx="17" fill="#FFB020" fill-opacity="0.10" stroke="#FFB020" stroke-opacity="0.45"/>
+        <circle cx="20" cy="17" r="4" fill="#FFC24D"/>
+        <text x="34" y="22" fill="#FFDD9E">Crea fatture</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- ===== RIGHT: invoice + MCP graph ===== -->
+  <g transform="translate(866, 74)">
+    <!-- connection nodes -->
+    <g stroke="#38E1C4" stroke-opacity="0.45" stroke-width="2">
+      <line x1="196" y1="70" x2="286" y2="34"/>
+      <line x1="196" y1="120" x2="300" y2="150"/>
+      <line x1="196" y1="150" x2="286" y2="214"/>
+    </g>
+    <g>
+      <circle cx="294" cy="30" r="9" fill="url(#cyan)"/>
+      <circle cx="308" cy="150" r="9" fill="url(#cyan)"/>
+      <circle cx="294" cy="220" r="9" fill="url(#cyan)"/>
+      <text x="316" y="35" font-size="13" font-weight="600" fill="#8FE9DA">Client MCP</text>
+      <text x="326" y="155" font-size="13" font-weight="600" fill="#8FE9DA">API</text>
+      <text x="316" y="225" font-size="13" font-weight="600" fill="#8FE9DA">SDI</text>
+    </g>
+
+    <!-- invoice card -->
+    <g filter="url(#soft)"><rect x="18" y="26" width="184" height="210" rx="18" fill="#000000" fill-opacity="0.35"/></g>
+    <rect x="10" y="18" width="184" height="210" rx="18" fill="#141B36" stroke="#2A3560" stroke-width="1.5"/>
+    <!-- header bar -->
+    <rect x="10" y="18" width="184" height="52" rx="18" fill="#1B2447"/>
+    <rect x="10" y="52" width="184" height="18" fill="#1B2447"/>
+    <circle cx="38" cy="44" r="13" fill="url(#accent)"/>
+    <path d="M32 44 h12 M38 38 v12" stroke="#0B1020" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="60" y="49" font-size="15" font-weight="700" fill="#EAF0FF">Fattura</text>
+
+    <!-- lines -->
+    <g opacity="0.9">
+      <rect x="30" y="90"  width="120" height="9" rx="4.5" fill="#33406E"/>
+      <rect x="30" y="110" width="144" height="9" rx="4.5" fill="#2B3763"/>
+      <rect x="30" y="130" width="96"  height="9" rx="4.5" fill="#2B3763"/>
+    </g>
+    <!-- table rows -->
+    <rect x="30" y="156" width="144" height="1.5" fill="#2A3560"/>
+    <g font-size="11" font-weight="600">
+      <rect x="30" y="166" width="70" height="8" rx="4" fill="#33406E"/>
+      <rect x="140" y="166" width="34" height="8" rx="4" fill="#FF8A5C" fill-opacity="0.7"/>
+      <rect x="30" y="184" width="86" height="8" rx="4" fill="#33406E"/>
+      <rect x="140" y="184" width="34" height="8" rx="4" fill="#FF8A5C" fill-opacity="0.7"/>
+    </g>
+    <!-- total -->
+    <rect x="30" y="204" width="144" height="1.5" fill="#2A3560"/>
+    <text x="30" y="220" font-size="12" font-weight="700" fill="#9FB0DE">IVA 22%</text>
+    <text x="174" y="220" font-size="12" font-weight="800" fill="#FFB84D" text-anchor="end">€ 158,60</text>
+
+    <!-- live spark badge -->
+    <g transform="translate(150, 8)">
+      <circle cx="16" cy="16" r="16" fill="#0B1020"/>
+      <circle cx="16" cy="16" r="13" fill="url(#accent)"/>
+      <path d="M18 7 l-8 11 h6 l-2 8 8 -11 h-6 z" fill="#0B1020"/>
+    </g>
+  </g>
+
+  <!-- tricolore accent -->
+  <g>
+    <rect x="0" y="354" width="426" height="6" fill="#2E9E5B"/>
+    <rect x="426" y="354" width="428" height="6" fill="#EEF2FA"/>
+    <rect x="854" y="354" width="426" height="6" fill="#E23B3B"/>
+  </g>
+</svg>

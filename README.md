@@ -1,8 +1,25 @@
-# Aruba Fatture MCP
+<p align="center">
+  <img src="assets/banner.svg" alt="Aruba Fatture MCP — Fatturazione Elettronica Aruba per qualsiasi client MCP" width="100%">
+</p>
 
-Server [MCP](https://modelcontextprotocol.io) per usare le API di **Aruba Fatturazione Elettronica** con Claude (Claude Code, Claude Desktop e qualsiasi client MCP).
+<p align="center">
+  <a href="https://modelcontextprotocol.io"><img alt="MCP server" src="https://img.shields.io/badge/MCP-server-FF7A4D"></a>
+  <img alt="Node >= 18" src="https://img.shields.io/badge/Node-%E2%89%A5%2018-3C873A">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178C6">
+  <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-22B8E6">
+  <img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-38E1C4">
+</p>
 
-Documentazione API di riferimento: <https://fatturazioneelettronica.aruba.it/apidoc/v2/docs.html>
+<h1 align="center">Aruba Fatture MCP</h1>
+
+<p align="center">
+  <b>Fatturazione Elettronica Aruba per qualsiasi client MCP.</b><br>
+  Fatture inviate e ricevute, clienti e fornitori, statistiche IVA e creazione fatture — in tempo reale, anche senza utenza Premium.
+</p>
+
+Server [Model Context Protocol](https://modelcontextprotocol.io) che porta la **Fatturazione Elettronica di Aruba** dentro qualsiasi client MCP — Claude (Code e Desktop), Cursor, Cline, Zed e gli altri. Interroghi e crei fatture elettroniche (FatturaPA / SDI) in linguaggio naturale: «quanto ho fatturato quest'anno?», «prospetto IVA del trimestre», «chi sono i miei fornitori principali?», «genera la fattura per questo cliente».
+
+Documentazione API ufficiali Aruba: <https://fatturazioneelettronica.aruba.it/apidoc/v2/docs.html>
 
 Il server ha **tre sorgenti dati indipendenti**:
 
@@ -98,7 +115,11 @@ Le credenziali non vanno messe in file versionati: `.env` è già in `.gitignore
 
 L'ambiente `demo` usa i server di test Aruba (`demoauth`/`demows`): consigliato per le prime prove.
 
-### Claude Code
+### Collegare il server a un client MCP
+
+Il server parla `stdio` ed è compatibile con qualunque client MCP. La configurazione è sempre la stessa — comando `node <percorso>/dist/index.js` con le variabili d'ambiente qui sopra. Sotto due esempi (Claude Code e Claude Desktop); per **Cursor**, **Cline**, **Zed** e gli altri vale lo stesso schema `command`/`args`/`env` nel rispettivo file di configurazione MCP.
+
+#### Claude Code
 
 ```bash
 claude mcp add aruba-fatture ^
@@ -108,9 +129,9 @@ claude mcp add aruba-fatture ^
   -- node <percorso-del-progetto>\dist\index.js
 ```
 
-### Claude Desktop
+#### Claude Desktop
 
-In `claude_desktop_config.json`:
+In `claude_desktop_config.json` (o nel file MCP equivalente di Cursor/Cline/Zed):
 
 ```json
 {
@@ -138,6 +159,10 @@ In `claude_desktop_config.json`:
 - I token di accesso (30 min) e di refresh (60 min) sono gestiti automaticamente.
 
 ## Architettura
+
+<p align="center">
+  <img src="assets/architecture.svg" alt="Tre sorgenti dati (pannello web live, API ufficiali, archivio locale) verso un unico server MCP e qualsiasi client MCP" width="100%">
+</p>
 
 Il codice è organizzato per sorgente dati, in modo che i tre canali restino indipendenti.
 
@@ -173,7 +198,7 @@ pip install xmlschema
 python -c "import xmlschema; s = xmlschema.XMLSchema('test/xsd/fatturapa.xsd', locations={'http://www.w3.org/2000/09/xmldsig#': 'test/xsd/xmldsig-core-schema.xsd'}); s.validate('test/esempio-fattura.xml'); print('VALIDA')"
 ```
 
-## Esempi di richieste a Claude (pannello live)
+## Esempi di richieste (pannello live)
 
 - «Quanto ho fatturato quest'anno? E quanto ho speso in acquisti?»
 - «Fammi il prospetto IVA del 2026»
@@ -188,7 +213,7 @@ Dal pannello Aruba Fatturazione Elettronica, sezione fatture inviate/ricevute, s
 
 Con un'utenza Premium lo stesso archivio si popola via API con `download_invoice` in formato `zip`.
 
-## Esempi di richieste a Claude
+## Esempi di richieste
 
 Sulle API (utenza Premium):
 

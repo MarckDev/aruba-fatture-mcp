@@ -1,0 +1,96 @@
+<svg width="1100" height="440" viewBox="0 0 1100 440" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1100" y2="440" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0B1020"/>
+      <stop offset="1" stop-color="#0A0F22"/>
+    </linearGradient>
+    <linearGradient id="hub" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF7A4D"/>
+      <stop offset="1" stop-color="#FFB020"/>
+    </linearGradient>
+    <linearGradient id="claudeg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#38E1C4"/>
+      <stop offset="1" stop-color="#22B8E6"/>
+    </linearGradient>
+    <pattern id="grid" width="34" height="34" patternUnits="userSpaceOnUse">
+      <circle cx="1.2" cy="1.2" r="1.2" fill="#6E7BB0" fill-opacity="0.09"/>
+    </pattern>
+    <radialGradient id="hubglow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FF7A4D" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#FF7A4D" stop-opacity="0"/>
+    </radialGradient>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0 0 L9 4.5 L0 9 z" fill="#5A6795"/>
+    </marker>
+  </defs>
+
+  <rect width="1100" height="440" fill="url(#bg)"/>
+  <rect width="1100" height="440" fill="url(#grid)"/>
+
+  <text x="60" y="56" font-size="13" font-weight="700" letter-spacing="3" fill="#7FE7D4">ARCHITETTURA</text>
+  <text x="60" y="88" font-size="26" font-weight="800" fill="#F5F8FF" letter-spacing="-0.5">Tre sorgenti dati, un unico server MCP</text>
+
+  <!-- connectors -->
+  <g stroke-width="2.5" fill="none" marker-end="url(#arrow)">
+    <path d="M356 178 C 430 178, 440 220, 505 220" stroke="#FF7A4D" stroke-opacity="0.55"/>
+    <path d="M356 258 C 430 258, 440 224, 505 224" stroke="#38E1C4" stroke-opacity="0.5"/>
+    <path d="M356 338 C 430 338, 440 232, 505 232" stroke="#8FA0FF" stroke-opacity="0.5"/>
+  </g>
+  <path d="M760 226 C 815 226, 820 226, 878 226" stroke-width="2.5" fill="none" stroke="#38E1C4" stroke-opacity="0.6" marker-end="url(#arrow)"/>
+
+  <!-- ==== SOURCE CARDS ==== -->
+  <!-- 1 Pannello live -->
+  <g transform="translate(60,142)">
+    <rect x="0" y="0" width="296" height="72" rx="14" fill="#151C38" stroke="#FF7A4D" stroke-opacity="0.5" stroke-width="1.5"/>
+    <rect x="0" y="0" width="5" height="72" rx="2.5" fill="url(#hub)"/>
+    <circle cx="34" cy="30" r="13" fill="#FF7A4D" fill-opacity="0.16"/>
+    <path d="M28 24 h12 v14 l-3 -2 -3 2 -3 -2 -3 2 z" fill="#FF9366"/>
+    <text x="58" y="30" font-size="17" font-weight="700" fill="#F2F5FF">Pannello web</text>
+    <g transform="translate(196,18)"><rect width="52" height="20" rx="10" fill="#FF7A4D" fill-opacity="0.18"/><circle cx="13" cy="10" r="3.5" fill="#FF9366"/><text x="22" y="14" font-size="11" font-weight="700" fill="#FFC7A8">LIVE</text></g>
+    <text x="58" y="52" font-size="13" font-weight="500" fill="#9AA6C8">Tempo reale · nessuna utenza Premium</text>
+  </g>
+
+  <!-- 2 API ufficiali -->
+  <g transform="translate(60,222)">
+    <rect x="0" y="0" width="296" height="72" rx="14" fill="#151C38" stroke="#38E1C4" stroke-opacity="0.45" stroke-width="1.5"/>
+    <rect x="0" y="0" width="5" height="72" rx="2.5" fill="url(#claudeg)"/>
+    <circle cx="34" cy="30" r="13" fill="#38E1C4" fill-opacity="0.14"/>
+    <path d="M28 30 a6 6 0 1 1 12 0 a6 6 0 1 1 -12 0 M34 21 v18 M25 30 h18" stroke="#5FE9D0" stroke-width="1.6" fill="none"/>
+    <text x="58" y="30" font-size="17" font-weight="700" fill="#F2F5FF">API ufficiali</text>
+    <text x="58" y="52" font-size="13" font-weight="500" fill="#9AA6C8">Web service Aruba · utenza Premium</text>
+  </g>
+
+  <!-- 3 Archivio locale -->
+  <g transform="translate(60,302)">
+    <rect x="0" y="0" width="296" height="72" rx="14" fill="#151C38" stroke="#8FA0FF" stroke-opacity="0.45" stroke-width="1.5"/>
+    <rect x="0" y="0" width="5" height="72" rx="2.5" fill="#8FA0FF"/>
+    <circle cx="34" cy="30" r="13" fill="#8FA0FF" fill-opacity="0.14"/>
+    <path d="M26 25 h7 l2 3 h6 v10 h-15 z" fill="#A6B4FF"/>
+    <text x="58" y="30" font-size="17" font-weight="700" fill="#F2F5FF">Archivio locale</text>
+    <text x="58" y="52" font-size="13" font-weight="500" fill="#9AA6C8">XML · P7M firmati · ZIP · offline</text>
+  </g>
+
+  <!-- ==== HUB ==== -->
+  <circle cx="632" cy="226" r="150" fill="url(#hubglow)"/>
+  <g transform="translate(505,182)">
+    <rect x="0" y="0" width="255" height="88" rx="18" fill="#141B36" stroke="#3A4680" stroke-width="1.5"/>
+    <g transform="translate(22,24)">
+      <rect x="0" y="0" width="40" height="40" rx="11" fill="url(#hub)"/>
+      <path d="M14 12 h12 M14 20 h12 M14 28 h8" stroke="#0B1020" stroke-width="2.6" stroke-linecap="round"/>
+    </g>
+    <text x="78" y="38" font-size="18" font-weight="800" fill="#F5F8FF">Aruba Fatture MCP</text>
+    <text x="78" y="62" font-size="13" font-weight="600" fill="#9AA6C8">18 tool · inviate e ricevute separate</text>
+  </g>
+
+  <!-- ==== MCP CLIENT ==== -->
+  <g transform="translate(878,182)">
+    <rect x="0" y="0" width="160" height="88" rx="18" fill="#10182E" stroke="#38E1C4" stroke-opacity="0.5" stroke-width="1.5"/>
+    <g transform="translate(20,20)">
+      <circle cx="18" cy="18" r="18" fill="url(#claudeg)" fill-opacity="0.16"/>
+      <path d="M18 6 L21 15 L30 18 L21 21 L18 30 L15 21 L6 18 L15 15 z" fill="url(#claudeg)"/>
+    </g>
+    <text x="70" y="34" font-size="16" font-weight="800" fill="#EAF0FF">Client MCP</text>
+    <text x="70" y="54" font-size="11.5" font-weight="600" fill="#8FE9DA">Claude · Cursor</text>
+    <text x="70" y="70" font-size="11.5" font-weight="600" fill="#8FE9DA">Cline · Zed · …</text>
+  </g>
+</svg>
