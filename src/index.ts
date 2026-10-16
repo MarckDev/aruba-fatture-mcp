@@ -2,10 +2,14 @@
 /**
  * Server MCP per le API di Aruba Fatturazione Elettronica.
  *
- * Variabili d'ambiente richieste:
+ * Variabili d'ambiente:
  *  - ARUBA_USERNAME     username del servizio Fatturazione Elettronica Aruba
  *  - ARUBA_PASSWORD     password del servizio
  *  - ARUBA_ENVIRONMENT  "demo" (default) oppure "production"
+ *
+ * Su Windows, senza ARUBA_USERNAME e ARUBA_PASSWORD, le credenziali si
+ * chiedono con una finestra e si salvano cifrate con Windows Hello. Con
+ * l'opzione --reset-windows-hello si cancellano ed esce.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -26,13 +30,27 @@ import {
   prospettoIva,
   type Filtri,
 } from "./analisi.js";
-import { ArubaPanelClient, PanelError } from "./panel-client.js";
+import { ArubaPanelClient, PanelError, verificaLoginPannello } from "./panel-client.js";
+import { FornitoreHello } from "./credenziali/fornitore-hello.js";
+import { scegliAmbiente, scegliModalita } from "./credenziali/modalita.js";
+import {
+  COMANDO_RESET,
+  FonteStatica,
+  type FonteCredenziali,
+} from "./credenziali/tipi.js";
+import { cancellaVault, percorsoVault, type ChiaveHello } from "./credenziali/vault.js";
+import {
+  chiediCredenzialiWindows,
+  creaChiaveHelloWindows,
+} from "./credenziali/windows-native.js";
+import { creaTitolare } from "./titolare.js";
 import {
   andamento as andamentoPannello,
   controparti as contropartiPannello,
   filtra as filtraPannello,
   normalizzaInviata,
   normalizzaRicevuta,
+  parametriPdfPannello,
   totali as totaliPannello,
   type FatturaPannello,
   type FiltriPannello,
@@ -49,16 +67,42 @@ import { parseFatturaXml } from "./fatturapa.js";
 // Configurazione
 // ---------------------------------------------------------------------------
 
-const username = process.env.ARUBA_USERNAME;
-const password = process.env.ARUBA_PASSWORD;
-const environment = (process.env.ARUBA_ENVIRONMENT ?? "demo") as ArubaEnvironment;
+const modalita = scegliModalita(process.argv.slice(2), process.env, process.platform);
+const environment = scegliAmbiente(process.env, modalita.tipo === "hello") as ArubaEnvironment;
 
-if (!username || !password) {
-  console.error(
-    "Errore: impostare le variabili d'ambiente ARUBA_USERNAME e ARUBA_PASSWORD.",
-  );
+const CONTESTI_HELLO = {
+  contesto: "Sblocca le credenziali Aruba Fatture MCP",
+  contestoFirma: "Conferma il salvataggio delle credenziali Aruba Fatture MCP",
+};
+const comandoReset = `node "${process.argv[1] ?? "dist\\index.js"}" ${COMANDO_RESET}`;
+
+if (modalita.tipo === "errore") {
+  console.error(modalita.messaggio);
   process.exit(1);
 }
+
+if (modalita.tipo === "reset") {
+  if (process.platform !== "win32") {
+    console.error(`Errore: ${COMANDO_RESET} è disponibile solo su Windows.`);
+    process.exit(1);
+  }
+  try {
+    const percorso = percorsoVault();
+    const esito = await cancellaVault(percorso, await creaChiaveHelloWindows(CONTESTI_HELLO));
+    if (!esito.fileRimosso && !esito.chiaveRimossa) {
+      console.log("Nessuna credenziale Aruba salvata con Windows Hello.");
+    } else {
+      if (esito.fileRimosso) console.log(`Credenziali cancellate: ${percorso}`);
+      if (esito.chiaveRimossa) console.log("Chiave Windows Hello eliminata.");
+      console.log("Al prossimo uso da Claude Desktop verranno richieste di nuovo.");
+    }
+    process.exit(0);
+  } catch (errore) {
+    console.error(`Reset non riuscito: ${errore instanceof Error ? errore.message : String(errore)}`);
+    process.exit(1);
+  }
+}
+
 if (environment !== "demo" && environment !== "production") {
   console.error(
     `Errore: ARUBA_ENVIRONMENT deve essere "demo" o "production" (valore attuale: "${environment}").`,
@@ -66,7 +110,63 @@ if (environment !== "demo" && environment !== "production") {
   process.exit(1);
 }
 
-const client = new ArubaClient(username, password, environment);
+const modalitaHello = modalita.tipo === "hello";
+
+/**
+ * La chiave Hello si apre al primo uso: koffi viene caricata solo quando
+ * serve, e se il caricamento fallisce il server resta in piedi e ogni tool
+ * riporta l'errore.
+ */
+function chiaveHelloAlPrimoUso(): ChiaveHello {
+  let chiave: Promise<ChiaveHello> | null = null;
+  const apri = () =>
+    (chiave ??= creaChiaveHelloWindows(CONTESTI_HELLO).catch((errore) => {
+      chiave = null;
+      throw errore;
+    }));
+  return {
+    esiste: async () => (await apri()).esiste(),
+    crea: async () => (await apri()).crea(),
+    cifra: async (dati) => (await apri()).cifra(dati),
+    decifra: async (dati) => (await apri()).decifra(dati),
+    firma: async (dati) => (await apri()).firma(dati),
+    verificaFirma: async (dati, firma) => (await apri()).verificaFirma(dati, firma),
+    elimina: async () => (await apri()).elimina(),
+  };
+}
+
+const fonte: FonteCredenziali =
+  modalita.tipo === "env"
+    ? new FonteStatica(modalita.credenziali)
+    : new FornitoreHello({
+        chiave: chiaveHelloAlPrimoUso(),
+        percorso: percorsoVault(),
+        chiediCredenziali: (opz) =>
+          chiediCredenzialiWindows({
+            titolo: "Aruba Fatture MCP",
+            messaggio:
+              "Inserisci le credenziali del pannello Aruba Fatturazione Elettronica. " +
+              "Verranno salvate cifrate con Windows Hello. " +
+              `Per cancellarle: ${comandoReset}`,
+            ...opz,
+          }),
+        verifica: verificaLoginPannello,
+      });
+
+if (modalitaHello) {
+  console.error(
+    `Modalità Windows Hello: credenziali in ${percorsoVault()}. Per cancellarle: ${comandoReset}`,
+  );
+  if (environment === "demo") {
+    console.error(
+      'Attenzione: ARUBA_ENVIRONMENT è "demo", quindi i tool "API Aruba" useranno i server di prova con le credenziali di produzione del pannello. Impostare ARUBA_ENVIRONMENT=production.',
+    );
+  }
+}
+
+// In modalità Hello il token resta solo in memoria: il file in %TEMP% darebbe
+// accesso all'account senza password.
+const client = new ArubaClient(fonte, environment, { persistiToken: !modalitaHello });
 
 // ---------------------------------------------------------------------------
 // Utilità
@@ -174,34 +274,14 @@ const archivioPredefinito = process.env.ARUBA_ARCHIVE_DIR;
  */
 const cacheArchivio = new Map<string, EsitoCaricamento>();
 
-let titolareCache: { partitaIva: string | null; codiceFiscale: string | null } | null = null;
-
-/**
- * Partita IVA e codice fiscale del titolare, necessari per distinguere le
- * fatture emesse da quelle ricevute. Si leggono da `userInfo`, con fallback
- * alle variabili d'ambiente se l'account non è raggiungibile (archivio
- * utilizzabile anche offline).
- */
-async function titolare() {
-  if (titolareCache) return titolareCache;
-  const daEnv = {
+const titolare = creaTitolare({
+  daEnv: {
     partitaIva: process.env.ARUBA_VAT_CODE ?? null,
     codiceFiscale: process.env.ARUBA_FISCAL_CODE ?? null,
-  };
-  try {
-    const info = (await client.userInfo()) as {
-      vatCode?: string;
-      fiscalCode?: string;
-    };
-    titolareCache = {
-      partitaIva: info.vatCode ?? daEnv.partitaIva,
-      codiceFiscale: info.fiscalCode ?? daEnv.codiceFiscale,
-    };
-  } catch {
-    titolareCache = daEnv;
-  }
-  return titolareCache;
-}
+  },
+  modalitaHello,
+  userInfo: () => client.userInfo(),
+});
 
 async function archivio(percorso: string | undefined, ricarica = false) {
   const cartella = percorso ?? archivioPredefinito;
@@ -501,7 +581,7 @@ server.registerTool(
 // Pannello Aruba (API privata del pannello web)
 // ---------------------------------------------------------------------------
 
-const panelClient = new ArubaPanelClient(username, password);
+const panelClient = new ArubaPanelClient(fonte);
 
 const ENDPOINT_RICERCA = {
   inviate: "FatturaFrontEnd/advancedSearch",
@@ -775,7 +855,10 @@ server.registerTool(
         salvataggi.xml = target;
       }
       if (salvaPdfIn) {
-        const filePdf = await panelClient.service<ContenutoFile>(ep.pdf, { Id: id });
+        const filePdf = await panelClient.service<ContenutoFile>(
+          ep.pdf,
+          parametriPdfPannello(record, anno),
+        );
         if (filePdf.Content) {
           const target = resolve(salvaPdfIn);
           await mkdir(dirname(target), { recursive: true });

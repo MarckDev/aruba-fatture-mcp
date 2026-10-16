@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
+import type { Credenziali, FonteCredenziali } from "./credenziali/tipi.js";
 
 const ENDPOINTS = {
   demo: {
@@ -48,23 +49,33 @@ export class ArubaClient {
   private refreshToken: string | null = null;
   private refreshTokenExpiry = 0;
   private tokenAcquisition: Promise<string> | null = null;
-  private readonly tokenCachePath: string;
+  private tokenCachePath: string | null = null;
 
+  /**
+   * Con `persistiToken` il token è condiviso tra processi tramite un file in
+   * %TEMP%: /auth/signin ha un rate limit severo, quindi ogni login evitato
+   * conta. In modalità Windows Hello resta invece solo in memoria, perché quel
+   * file darebbe accesso all'account senza password.
+   */
   constructor(
-    private readonly username: string,
-    private readonly password: string,
+    private readonly fonte: FonteCredenziali,
     private readonly environment: ArubaEnvironment,
-  ) {
-    // Cache del token condivisa tra processi: /auth/signin ha un rate limit
-    // severo, quindi ogni login evitato conta.
+    private readonly opzioni: { persistiToken: boolean },
+  ) {}
+
+  /** Alla prima chiamata: il nome del file dipende dallo username. */
+  private async prepareTokenCache(): Promise<void> {
+    if (!this.opzioni.persistiToken || this.tokenCachePath) return;
+    const { username } = await this.fonte.ottieni();
     this.tokenCachePath = join(
       tmpdir(),
-      `aruba-fatture-mcp-token-${environment}-${createHash("sha256").update(username).digest("hex").slice(0, 12)}.json`,
+      `aruba-fatture-mcp-token-${this.environment}-${createHash("sha256").update(username).digest("hex").slice(0, 12)}.json`,
     );
     this.loadCachedToken();
   }
 
   private loadCachedToken(): void {
+    if (!this.tokenCachePath) return;
     try {
       const cached = JSON.parse(readFileSync(this.tokenCachePath, "utf8"));
       if (typeof cached.accessToken === "string" && typeof cached.accessTokenExpiry === "number") {
@@ -79,6 +90,7 @@ export class ArubaClient {
   }
 
   private saveCachedToken(): void {
+    if (!this.tokenCachePath) return;
     try {
       writeFileSync(
         this.tokenCachePath,
@@ -99,7 +111,8 @@ export class ArubaClient {
     return ENDPOINTS[this.environment];
   }
 
-  private async signin(body: URLSearchParams): Promise<void> {
+  /** `cred` è passato solo per il login con password: i suoi rifiuti vanno segnalati. */
+  private async signin(body: URLSearchParams, cred?: Credenziali): Promise<void> {
     const res = await fetch(`${this.urls.auth}/auth/signin`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -107,10 +120,20 @@ export class ArubaClient {
     });
     if (!res.ok) {
       const text = await res.text();
+      // 400/401 al login con password è l'unico caso che dice qualcosa sulla
+      // password: rate limit ed errori del server non devono farla richiedere.
+      // In demo le credenziali (quelle del pannello, di produzione) non sono
+      // valide per definizione: un rifiuto non dice nulla sulla password.
+      const rifiutata =
+        cred !== undefined &&
+        this.environment === "production" &&
+        (res.status === 400 || res.status === 401);
+      if (rifiutata) this.fonte.segnalaRifiuto(cred);
       const hint =
         res.status === 429
           ? "Rate limit di Aruba sull'autenticazione: attendi qualche minuto e riprova."
-          : `Verifica username/password e ambiente (${this.environment}).`;
+          : `Verifica username/password e ambiente (${this.environment}).` +
+            (rifiutata ? this.fonte.suggerimentoRifiuto : "");
       throw new ArubaApiError(
         `Autenticazione Aruba fallita (HTTP ${res.status}). ${hint}`,
         res.status,
@@ -133,6 +156,7 @@ export class ArubaClient {
    * (che è soggetto a rate limit severi).
    */
   private async ensureToken(forceNew = false): Promise<string> {
+    await this.prepareTokenCache();
     if (!forceNew && this.accessToken && Date.now() < this.accessTokenExpiry) {
       return this.accessToken;
     }
@@ -157,12 +181,14 @@ export class ArubaClient {
         // Refresh fallito: si riprova con il login completo.
       }
     }
+    const cred = await this.fonte.ottieni();
     await this.signin(
       new URLSearchParams({
         grant_type: "password",
-        username: this.username,
-        password: this.password,
+        username: cred.username,
+        password: cred.password,
       }),
+      cred,
     );
     return this.accessToken!;
   }

@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html><head><title>Accedi - Aruba</title></head>
+<body>
+<form id="kc-form-login" onsubmit="login.disabled = true; return true;" action="https://auth.example.test/realms/aruba/login-actions/authenticate?session_code=abc&amp;execution=1&amp;client_id=gateway" method="post">
+  <input tabindex="1" id="username" class="pf-c-form-control" name="username" value="" type="text" autofocus autocomplete="off" />
+  <input tabindex="2" id="password" class="pf-c-form-control" name="password" type="password" autocomplete="off" />
+  <input type="hidden" id="id-hidden-input" name="credentialId" />
+  <input tabindex="4" class="pf-c-button" name="login" id="kc-login" type="submit" value="Accedi"/>
+</form>
+</body></html>

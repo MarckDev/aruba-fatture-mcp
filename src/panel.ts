@@ -243,3 +243,23 @@ export function andamento(
     }))
     .sort((a, b) => a.periodo.localeCompare(b.periodo));
 }
+
+/**
+ * Parametri per estrarre il PDF di una fattura, come li invia il pannello
+ * web: oltre all'Id servono la posizione della fattura nel suo file (un file
+ * SDI può contenere un lotto di più fatture) e l'anno fiscale. Senza
+ * `Posizione` il pannello risponde 400 "Parametro obbligatorio
+ * (request.PosizioneFattura)".
+ */
+export function parametriPdfPannello(
+  record: ItemPannello,
+  annoFiscale: number,
+): { Id: unknown; Posizione: number; AnnoFiscale: number } {
+  const posizione = record.Posizione;
+  if (typeof posizione !== "number") {
+    throw new Error(
+      "Il pannello non ha restituito la Posizione della fattura, necessaria per estrarne il PDF.",
+    );
+  }
+  return { Id: record.Id, Posizione: posizione, AnnoFiscale: annoFiscale };
+}

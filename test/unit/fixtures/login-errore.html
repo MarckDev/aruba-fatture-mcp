@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html><head><title>Accedi - Aruba</title></head>
+<body>
+<div class="alert-error pf-c-alert pf-m-inline pf-m-danger"><span class="kc-feedback-text">Nome utente o password non validi.</span></div>
+<form id="kc-form-login" action="https://auth.example.test/realms/aruba/login-actions/authenticate?session_code=def&amp;execution=1&amp;client_id=gateway" method="post">
+  <input tabindex="1" id="username" name="username" value="mario.rossi" type="text" aria-invalid="true" />
+  <input tabindex="2" id="password" name="password" type="password" aria-invalid="true" />
+  <span id="input-error" class="pf-c-form__helper-text pf-m-error" aria-live="polite">Nome utente o password non validi.</span>
+  <input tabindex="4" name="login" id="kc-login" type="submit" value="Accedi"/>
+</form>
+</body></html>

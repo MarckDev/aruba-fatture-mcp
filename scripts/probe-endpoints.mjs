@@ -1,10 +1,11 @@
 // Verifica quali endpoint sono accessibili con l'utenza corrente.
 import { ArubaClient } from "../dist/aruba-client.js";
+import { FonteStatica } from "../dist/credenziali/tipi.js";
 
 const client = new ArubaClient(
-  process.env.ARUBA_USERNAME,
-  process.env.ARUBA_PASSWORD,
+  new FonteStatica({ username: process.env.ARUBA_USERNAME, password: process.env.ARUBA_PASSWORD }),
   process.env.ARUBA_ENVIRONMENT ?? "production",
+  { persistiToken: true },
 );
 
 const pause = () => new Promise((r) => setTimeout(r, 5200));

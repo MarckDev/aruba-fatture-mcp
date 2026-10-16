@@ -16,6 +16,8 @@
  * senza preavviso; va usata solo per accedere ai propri dati.
  */
 
+import type { Credenziali, FonteCredenziali } from "./credenziali/tipi.js";
+
 const PANEL_ORIGIN = "https://fatturazioneelettronica.aruba.it";
 
 export class PanelError extends Error {
@@ -73,31 +75,42 @@ function splitSetCookie(headers: Headers): string[] {
 }
 
 interface PanelSession {
-  username: string;
+  credenziali: Credenziali;
   createdAt: number;
 }
 
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36";
 
-export class ArubaPanelClient {
-  private jar = new CookieJar();
-  private session: PanelSession | null = null;
-  private loginInFlight: Promise<void> | null = null;
-  /** La sessione del gateway dura a lungo, ma la si rinnova per prudenza. */
-  private readonly sessionTtlMs = 20 * 60 * 1000;
+export type EsitoLogin = "ok" | "otp" | "rifiutata";
 
-  constructor(
-    private readonly username: string,
-    private readonly password: string,
-  ) {}
+/**
+ * Interpreta la risposta di Keycloak al POST delle credenziali.
+ *
+ * Keycloak mostra la pagina del codice monouso solo dopo aver accettato la
+ * password, quindi "otp" significa anche "password corretta". Un form di login
+ * riproposto significa invece password rifiutata. Tutto il resto (rate limit,
+ * errori del server, pagine sconosciute) non dice nulla sulla password.
+ */
+export function classificaRispostaLogin(
+  status: number,
+  location: string | null,
+  html: string,
+): EsitoLogin | "sconosciuto" {
+  if (status === 302) {
+    return location && /[?&]code=/.test(location) ? "ok" : "sconosciuto";
+  }
+  if (status === 429 || status >= 500) return "sconosciuto";
+  if (/<input[^>]*\sname=["'](otp|totp)["']/i.test(html)) return "otp";
+  if (/<input[^>]*\sname=["']password["']/i.test(html)) return "rifiutata";
+  return "sconosciuto";
+}
 
-  // -- Basso livello: richiesta senza seguire i redirect, con cookie per host --
+/** Richieste HTTP senza redirect automatici, con un cookie jar per host. */
+class SessioneHttp {
+  readonly jar = new CookieJar();
 
-  private async raw(
-    url: string,
-    init: RequestInit & { body?: string } = {},
-  ): Promise<Response> {
+  async raw(url: string, init: RequestInit & { body?: string } = {}): Promise<Response> {
     const host = new URL(url).host;
     const headers = new Headers(init.headers);
     headers.set("User-Agent", USER_AGENT);
@@ -110,7 +123,7 @@ export class ArubaPanelClient {
   }
 
   /** Segue i redirect manualmente, riapplicando i cookie del dominio di arrivo. */
-  private async follow(url: string, maxHops = 10): Promise<Response> {
+  async follow(url: string, maxHops = 10): Promise<Response> {
     let current = url;
     for (let hop = 0; hop < maxHops; hop++) {
       const res = await this.raw(current);
@@ -124,59 +137,112 @@ export class ArubaPanelClient {
     }
     throw new PanelError("Troppi redirect durante il login.", 0, current);
   }
+}
+
+const MESSAGGIO_OTP =
+  "Login Aruba non riuscito: sull'account è attiva la verifica in due passaggi, non ancora supportata dai tool del pannello. La password è corretta.";
+
+/**
+ * Passi 1–3 del login OpenID Connect (authorization code): avvio dal gateway,
+ * pagina di login Keycloak, POST delle credenziali. Restituisce l'esito e, se
+ * riuscito, l'URL col code da riportare al gateway.
+ */
+async function inviaCredenziali(
+  sessione: SessioneHttp,
+  cred: Credenziali,
+): Promise<{ esito: EsitoLogin; codeUrl: string; corpo: string }> {
+  // 1) Avvio dal gateway: risponde 302 verso Keycloak e setta il cookie di
+  //    sessione con cui, al ritorno, assocerà il code al giusto stato.
+  const start = await sessione.raw(`${PANEL_ORIGIN}/api/oauth2/authorization/gateway`);
+  const keycloakUrl = start.headers.get("location");
+  if (start.status < 300 || start.status >= 400 || !keycloakUrl) {
+    const body = await start.text();
+    throw new PanelError(
+      "Avvio del login non riuscito: il gateway non ha reindirizzato a Keycloak.",
+      start.status,
+      body,
+    );
+  }
+
+  // 2) Pagina di login Keycloak: se ne estrae l'action del form.
+  const loginPage = await sessione.follow(keycloakUrl);
+  const html = await loginPage.text();
+  const action = extractFormAction(html);
+  if (!action) {
+    throw new PanelError(
+      "Form di login Keycloak non trovato: la pagina è cambiata o l'utenza è bloccata.",
+      loginPage.status,
+      html.slice(0, 400),
+    );
+  }
+
+  // 3) POST delle credenziali: risposta 302 con il code verso il gateway.
+  const form = new URLSearchParams({
+    username: cred.username,
+    password: cred.password,
+    credentialId: "",
+  });
+  const posted = await sessione.raw(action, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: form.toString(),
+  });
+  const location = posted.headers.get("location");
+  const corpo = location ?? (await posted.text());
+  const esito = classificaRispostaLogin(posted.status, location, corpo);
+  if (esito === "sconosciuto") {
+    const hint =
+      posted.status === 429
+        ? "Troppi tentativi di accesso: attendi qualche minuto e riprova."
+        : "Risposta inattesa dal server di autenticazione.";
+    throw new PanelError(`Login Aruba non riuscito. ${hint}`, posted.status, corpo.slice(0, 400));
+  }
+  return { esito, codeUrl: location ?? "", corpo };
+}
+
+function extractFormAction(html: string): string | null {
+  const match = html.match(/<form[^>]*\saction="([^"]+)"/i);
+  if (!match) return null;
+  return match[1].replace(/&amp;/g, "&");
+}
+
+/**
+ * Verifica username e password con un login reale al pannello, senza tenere
+ * la sessione: serve a controllare le credenziali prima di salvarle. Lancia
+ * PanelError quando la risposta non dice nulla sulla password (es. 429).
+ */
+export async function verificaLoginPannello(cred: Credenziali): Promise<EsitoLogin> {
+  const { esito } = await inviaCredenziali(new SessioneHttp(), cred);
+  return esito;
+}
+
+export class ArubaPanelClient {
+  private sessione = new SessioneHttp();
+  private session: PanelSession | null = null;
+  private loginInFlight: Promise<void> | null = null;
+  /** La sessione del gateway dura a lungo, ma la si rinnova per prudenza. */
+  private readonly sessionTtlMs = 20 * 60 * 1000;
+
+  constructor(private readonly fonte: FonteCredenziali) {}
 
   // -- Login OpenID Connect (authorization code) --
 
   private async doLogin(): Promise<void> {
-    // 1) Avvio dal gateway: risponde 302 verso Keycloak e setta il cookie di
-    //    sessione con cui, al ritorno, assocerà il code al giusto stato.
-    const start = await this.raw(`${PANEL_ORIGIN}/api/oauth2/authorization/gateway`);
-    const keycloakUrl = start.headers.get("location");
-    if (start.status < 300 || start.status >= 400 || !keycloakUrl) {
-      const body = await start.text();
+    const cred = await this.fonte.ottieni();
+    const { esito, codeUrl, corpo } = await inviaCredenziali(this.sessione, cred);
+    if (esito === "rifiutata") {
+      this.fonte.segnalaRifiuto(cred);
       throw new PanelError(
-        "Avvio del login non riuscito: il gateway non ha reindirizzato a Keycloak.",
-        start.status,
-        body,
+        "Login Aruba non riuscito. Credenziali rifiutate: verifica username e password." +
+          this.fonte.suggerimentoRifiuto,
+        0,
+        corpo.slice(0, 400),
       );
     }
-
-    // 2) Pagina di login Keycloak: se ne estrae l'action del form.
-    const loginPage = await this.follow(keycloakUrl);
-    const html = await loginPage.text();
-    const action = this.extractFormAction(html);
-    if (!action) {
-      // Già autenticato lato Keycloak: la pagina può contenere direttamente il
-      // redirect col code. Improbabile ad avvio pulito, ma gestito.
-      throw new PanelError(
-        "Form di login Keycloak non trovato: la pagina è cambiata o l'utenza è bloccata.",
-        loginPage.status,
-        html.slice(0, 400),
-      );
-    }
-
-    // 3) POST delle credenziali: risposta 302 con il code verso il gateway.
-    const form = new URLSearchParams({
-      username: this.username,
-      password: this.password,
-      credentialId: "",
-    });
-    const posted = await this.raw(action, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: form.toString(),
-    });
-    const codeUrl = posted.headers.get("location");
-    if (posted.status !== 302 || !codeUrl || !/[?&]code=/.test(codeUrl)) {
-      const body = codeUrl ?? (await posted.text());
-      const hint = /error|login-actions/i.test(body)
-        ? "Credenziali rifiutate: verifica username e password."
-        : "Risposta inattesa dal server di autenticazione.";
-      throw new PanelError(`Login Aruba non riuscito. ${hint}`, posted.status, body);
-    }
+    if (esito === "otp") throw new PanelError(MESSAGGIO_OTP, 0, "");
 
     // 4) Ritorno al gateway col code: stabilisce la sessione applicativa.
-    const landing = await this.follow(codeUrl);
+    const landing = await this.sessione.follow(codeUrl);
     if (landing.status >= 400) {
       throw new PanelError(
         "Scambio del code col gateway non riuscito.",
@@ -185,31 +251,27 @@ export class ArubaPanelClient {
       );
     }
 
-    this.session = { username: this.username, createdAt: Date.now() };
-  }
-
-  private extractFormAction(html: string): string | null {
-    const match = html.match(/<form[^>]*\saction="([^"]+)"/i);
-    if (!match) return null;
-    return match[1].replace(/&amp;/g, "&");
+    this.session = { credenziali: cred, createdAt: Date.now() };
   }
 
   /** Garantisce una sessione valida, serializzando i login concorrenti. */
-  private async ensureSession(force = false): Promise<void> {
+  private async ensureSession(force = false): Promise<PanelSession> {
     if (
       !force &&
       this.session &&
       Date.now() - this.session.createdAt < this.sessionTtlMs
     ) {
-      return;
+      return this.session;
     }
-    if (this.loginInFlight) return this.loginInFlight;
-    this.jar = new CookieJar();
-    this.session = null;
-    this.loginInFlight = this.doLogin().finally(() => {
-      this.loginInFlight = null;
-    });
-    return this.loginInFlight;
+    if (!this.loginInFlight) {
+      this.sessione = new SessioneHttp();
+      this.session = null;
+      this.loginInFlight = this.doLogin().finally(() => {
+        this.loginInFlight = null;
+      });
+    }
+    await this.loginInFlight;
+    return this.session!;
   }
 
   // -- Chiamate ai servizi del pannello --
@@ -225,24 +287,24 @@ export class ArubaPanelClient {
     body: unknown = {},
     method: "POST" | "DELETE" = "POST",
   ): Promise<T> {
-    await this.ensureSession();
+    let { credenziali } = await this.ensureSession();
 
     const doCall = () =>
-      this.raw(`${PANEL_ORIGIN}/services/${path}`, {
+      this.sessione.raw(`${PANEL_ORIGIN}/services/${path}`, {
         method,
         headers: {
           "Content-Type": "application/json",
           Accept: "application/json",
           "X-Requested-With": "XMLHttpRequest",
-          "aru-sub": this.username,
-          "aru-delegator": this.username,
+          "aru-sub": credenziali.username,
+          "aru-delegator": credenziali.username,
         },
         body: JSON.stringify(body),
       });
 
     let res = await doCall();
     if (res.status === 401) {
-      await this.ensureSession(true);
+      ({ credenziali } = await this.ensureSession(true));
       res = await doCall();
     }
     if (!res.ok) {
